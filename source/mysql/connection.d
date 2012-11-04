@@ -2531,6 +2531,7 @@ private:
    Variant[] _inParams;
    ParameterSpecialization[] _psa;
    string _prevFunc;
+   int[string] _paramNames;
 
    bool sendCmd(ubyte cmd)
    {
@@ -2847,7 +2848,7 @@ private:
                vcl += packed.length;
                break;
             default:
-               throw new MYX("Unsupported parameter type", __FILE__, __LINE__);
+               throw new MYX("Unsupported parameter type" ~ ts, __FILE__, __LINE__);
          }
       }
       vals.length = vcl;
@@ -2899,6 +2900,23 @@ private:
       }
    }
 
+   void parseParameterNames()
+   {
+     import std.regex;
+
+    static auto r = regex(r"[?]\w*", "g");
+
+    auto i = 0;
+    foreach (c; match(_sql, r))
+    {
+      if (c.hit.length > 1)
+        _paramNames[c.hit] = i;
+      i++;
+    }
+
+    _sql = replace(_sql, r, "?");
+   }
+
 public:
 
    /**
@@ -2921,6 +2939,8 @@ public:
    this(Connection con, string sql)
    {
       _sql = sql;
+      parseParameterNames();
+
       this(con);
    }
 
@@ -2946,8 +2966,18 @@ public:
          purgeResult();
          releaseStatement();
          _con.resetPacket();
-         return _sql = sql;
+         _sql = sql;
+         parseParameterNames();
+         return _sql;
       }
+   }
+
+   @property string[] parameterNames()
+   {
+     if (_paramNames == null)
+       return null;
+
+     return _paramNames.keys;
    }
 
    /**
@@ -3095,12 +3125,28 @@ public:
       // number is within the required range
       enforceEx!MYX(_hStmt, "The statement must be prepared before parameters are bound.");
       enforceEx!MYX(pIndex < _psParams, "Parameter number is out of range for the prepared statement.");
-      _inParams[pIndex] = &val;
+      if (typeid(val) == typeid(Variant))
+        _inParams[pIndex] = val;
+      else
+        _inParams[pIndex] = &val;
       if (!psn.dummy)
       {
          psn.pIndex = pIndex;
          _psa[pIndex] = psn;
       }
+   }
+   
+   void bindParameter(T)(ref T val, string name, ParameterSpecialization psn = PSN(0, false, SQLType.DEFAULT, 0, null, true))
+   {
+     if (name[0] != '?')
+       name = "?" ~ name;
+
+     if (name in _paramNames)
+     {
+       auto index = _paramNames[name];
+
+       bindParameter(val, index, psn);
+     }
    }
 
    /**
