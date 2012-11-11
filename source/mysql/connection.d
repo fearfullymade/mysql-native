@@ -1733,7 +1733,7 @@ private:
          incomplete = true;
       else
       {
-         for (uint i = p+len-1; i >= p; i--) { ac <<= 8; ac |= packet[i];  }
+         for (long i = p+len-1; i >= p; i--) { ac <<= 8; ac |= packet[i]; }
          p += len;
       }
       return cast(T) ac;
