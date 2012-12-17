@@ -57,6 +57,7 @@ module mysql.connection;
 import mysql.sha1;
 
 import vibe.core.net;
+import vibe.core.log;
 import vibe.utils.string;
 
 import std.algorithm;
@@ -823,8 +824,13 @@ SQLValue consumeBinaryValueIfComplete(T, int N=T.sizeof)(ref ubyte[] packet, boo
     assert(!result.isNull);
     if(!result.isIncomplete)
     {
-        // only integral types is unsigned
-        static if(isIntegral!T)
+        // only integral and boolean types are unsigned
+        static if(isBoolean!T)
+        {
+            //TODO: figure out how to handle this
+            result.value = true;// packet[0] == 1;
+        }
+        else static if(isIntegral!T)
         {
             if(unsigned)
                 result.value = packet.consume!(Unsigned!T)();
@@ -3311,7 +3317,7 @@ private:
                     vcl += packed.length;
                     break;
                 default:
-                    throw new MYX("Unsupported parameter type", __FILE__, __LINE__);
+                    throw new MYX("Unsupported parameter type: " ~ ts, __FILE__, __LINE__);
             }
         }
         vals.length = vcl;
