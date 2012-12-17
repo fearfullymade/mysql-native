@@ -80,6 +80,45 @@ class MySQLException: Exception
 alias MySQLException MYX;
 
 /**
+ * Received invalid data from the server which violates the MySQL network protocol.
+ */
+class MySQLProtocolException: MySQLException
+{
+    this(string msg, string file, size_t line) { super(msg, file, line); }
+}
+alias MySQLProtocolException MYXProtocol;
+
+/**
+ * The server sent back a MySQL error code and message. If the server is 4.1+,
+ * there should also be an ANSI/ODBC-standard SQLSTATE error code.
+ *
+ * See_Also: https://dev.mysql.com/doc/refman/5.5/en/error-messages-server.html
+ */
+class MySQLReceivedException: MySQLException
+{
+    ushort errorCode;
+    char[5] sqlState;
+
+    this(OKErrorPacket okp, string file, size_t line)
+    {
+        this(okp.message, okp.serverStatus, okp.sqlState, file, line);
+    }
+
+    this(string msg, ushort errorCode, char[5] sqlState, string file, size_t line)
+    {
+        this.errorCode = errorCode;
+        this.sqlState = sqlState;
+        super("MySQL error: " ~ msg, file, line);
+    }
+}
+alias MySQLReceivedException MYXReceived;
+
+private void enforcePacketOK(string file = __FILE__, size_t line = __LINE__)(OKErrorPacket okp)
+{
+    enforce(!okp.error, new MYXReceived(okp, file, line));
+}
+
+/**
  * A simple struct to represent time difference.
  *
  * D's std.datetime does not have a type that is closely compatible with the MySQL
@@ -105,10 +144,10 @@ struct TimeDiff
  */
 TimeDiff toTimeDiff(ubyte[] a)
 {
-    enforceEx!MYX(a.length, "Supplied byte array is zero length");
+    enforceEx!MYXProtocol(a.length, "Supplied byte array is zero length");
     TimeDiff td;
     uint l = a[0];
-    enforceEx!MYX(l == 0 || l == 5 || l == 8 || l == 12, "Bad Time length in binary row.");
+    enforceEx!MYXProtocol(l == 0 || l == 5 || l == 8 || l == 12, "Bad Time length in binary row.");
     if (l >= 5)
     {
         td.negative = (a[1]  != 0);
@@ -162,10 +201,10 @@ TimeDiff toTimeDiff(string s)
  */
 TimeOfDay toTimeOfDay(ubyte[] a)
 {
-    enforceEx!MYX(a.length, "Supplied byte array is zero length");
+    enforceEx!MYXProtocol(a.length, "Supplied byte array is zero length");
     uint l = a[0];
-    enforceEx!MYX(l == 0 || l == 5 || l == 8 || l == 12, "Bad Time length in binary row.");
-    enforceEx!MYX(l >= 8, "Time column value is not in a time-of-day format");
+    enforceEx!MYXProtocol(l == 0 || l == 5 || l == 8 || l == 12, "Bad Time length in binary row.");
+    enforceEx!MYXProtocol(l >= 8, "Time column value is not in a time-of-day format");
 
     TimeOfDay tod;
     tod.hour    = a[6];
@@ -186,7 +225,7 @@ TimeOfDay toTimeOfDay(string s)
 {
     TimeOfDay tod;
     tod.hour = parse!int(s);
-    enforceEx!MYX(tod.hour <= 24 && tod.hour >= 0, "Time column value is in time difference form");
+    enforceEx!MYXProtocol(tod.hour <= 24 && tod.hour >= 0, "Time column value is in time difference form");
     munch(s, ":");
     tod.minute = parse!ubyte(s);
     munch(s, ":");
@@ -233,11 +272,11 @@ ubyte[] pack(TimeOfDay tod)
  */
 Date toDate(ubyte[] a)
 {
-    enforceEx!MYX(a.length, "Supplied byte array is zero length");
+    enforceEx!MYXProtocol(a.length, "Supplied byte array is zero length");
     if (a[0] == 0)
         return Date(0,0,0);
 
-    enforceEx!MYX(a[0] >= 4, "Binary date representation is too short");
+    enforceEx!MYXProtocol(a[0] >= 4, "Binary date representation is too short");
     int year    = (a[2]  << 8) + a[1];
     int month   = cast(int) a[3];
     int day     = cast(int) a[4];
@@ -303,11 +342,11 @@ ubyte[] pack(Date dt)
  */
 DateTime toDateTime(ubyte[] a)
 {
-    enforceEx!MYX(a.length, "Supplied byte array is zero length");
+    enforceEx!MYXProtocol(a.length, "Supplied byte array is zero length");
     if (a[0] == 0)
         return DateTime();
 
-    enforceEx!MYX(a[0] >= 4, "Supplied ubyte[] is not long enough");
+    enforceEx!MYXProtocol(a[0] >= 4, "Supplied ubyte[] is not long enough");
     int year    = (a[2] << 8) + a[1];
     int month   =  a[3];
     int day     =  a[4];
@@ -318,7 +357,7 @@ DateTime toDateTime(ubyte[] a)
     }
     else
     {
-        enforceEx!MYX(a[0] >= 7, "Supplied ubyte[] is not long enough");
+        enforceEx!MYXProtocol(a[0] >= 7, "Supplied ubyte[] is not long enough");
         int hour    = a[5];
         int minute  = a[6];
         int second  = a[7];
@@ -373,8 +412,8 @@ DateTime toDateTime(ulong x)
     x /= 100;
     int year   = cast(int) x%10000;
     // 2038-01-19 03:14:07
-    enforceEx!MYX(year >= 1970 &&  year < 2039, "Date/time out of range for 2 bit timestamp");
-    enforceEx!MYX(year == 2038 && (month > 1 || day > 19 || hour > 3 || minute > 14 || second > 7),
+    enforceEx!MYXProtocol(year >= 1970 &&  year < 2039, "Date/time out of range for 2 bit timestamp");
+    enforceEx!MYXProtocol(year == 2038 && (month > 1 || day > 19 || hour > 3 || minute > 14 || second > 7),
             "Date/time out of range for 2 bit timestamp");
     return DateTime(year, month, day, hour, minute, second);
 }
@@ -618,10 +657,10 @@ in
 }
 body
 {
-    enforceEx!MYX(packet.length, "Supplied byte array is zero length");
+    enforceEx!MYXProtocol(packet.length, "Supplied byte array is zero length");
     uint length = packet.front;
-    enforceEx!MYX(length == 0 || length == 5 || length == 8 || length == 12, "Bad Time length in binary row.");
-    enforceEx!MYX(length >= 8, "Time column value is not in a time-of-day format");
+    enforceEx!MYXProtocol(length == 0 || length == 5 || length == 8 || length == 12, "Bad Time length in binary row.");
+    enforceEx!MYXProtocol(length >= 8, "Time column value is not in a time-of-day format");
 
     packet.popFront(); // length
     auto bytes = packet.consume(length);
@@ -645,7 +684,7 @@ body
     if(!numBytes)
         return Date(0,0,0);
 
-    enforceEx!MYX(numBytes >= 4, "Binary date representation is too short");
+    enforceEx!MYXProtocol(numBytes >= 4, "Binary date representation is too short");
     auto year    = packet.consume!ushort();
     auto month   = packet.consume!ubyte();
     auto day     = packet.consume!ubyte();
@@ -664,7 +703,7 @@ body
     if(numBytes == 0)
         return DateTime();
 
-    enforceEx!MYX(numBytes >= 4, "Supplied packet is not large enough to store DateTime");
+    enforceEx!MYXProtocol(numBytes >= 4, "Supplied packet is not large enough to store DateTime");
 
     int year    = packet.consume!ushort();
     int month   = packet.consume!ubyte();
@@ -674,7 +713,7 @@ body
     int second  = 0;
     if(numBytes > 4)
     {
-        enforceEx!MYX(numBytes >= 7, "Supplied packet is not large enough to store a DateTime with TimeOfDay");
+        enforceEx!MYXProtocol(numBytes >= 7, "Supplied packet is not large enough to store a DateTime with TimeOfDay");
         hour    = packet.consume!ubyte();
         minute  = packet.consume!ubyte();
         second  = packet.consume!ubyte();
@@ -1204,7 +1243,7 @@ body
     assert(!lcb.isIncomplete);
     if(lcb.isNull)
         return null;
-    enforceEx!MYX(lcb.value <= uint.max, "Protocol Length Coded String is too long");
+    enforceEx!MYXProtocol(lcb.value <= uint.max, "Protocol Length Coded String is too long");
     return cast(string)packet.consume(cast(size_t)lcb.value).idup;
 }
 
@@ -1438,12 +1477,12 @@ struct OKErrorPacket
             packet.popFront(); // skip marker/field code
             error = true;
 
-            enforceEx!MYX(packet.length > 2, "Malformed Error packet - Missing error code");
+            enforceEx!MYXProtocol(packet.length > 2, "Malformed Error packet - Missing error code");
             serverStatus = packet.consume!short(); // error code into server state
             if (packet.front == cast(ubyte) '#') //4.1+ error packet
             {
                 packet.popFront(); // skip 4.1 marker
-                enforceEx!MYX(packet.length > 5, "Malformed Error packet - Missing SQL state");
+                enforceEx!MYXProtocol(packet.length > 5, "Malformed Error packet - Missing SQL state");
                 sqlState[] = cast(char[]) packet[0..5];
                 packet = packet[5..$];
             }
@@ -1452,27 +1491,27 @@ struct OKErrorPacket
         {
             packet.popFront(); // skip marker/field code
 
-            enforceEx!MYX(packet.length > 1, "Malformed OK packet - Missing affected rows");
+            enforceEx!MYXProtocol(packet.length > 1, "Malformed OK packet - Missing affected rows");
             auto lcb = packet.consumeIfComplete!LCB();
             assert(!lcb.isNull);
             assert(!lcb.isIncomplete);
             affected = lcb.value;
 
-            enforceEx!MYX(packet.length > 1, "Malformed OK packet - Missing insert id");
+            enforceEx!MYXProtocol(packet.length > 1, "Malformed OK packet - Missing insert id");
             lcb = packet.consumeIfComplete!LCB();
             assert(!lcb.isNull);
             assert(!lcb.isIncomplete);
             insertID = lcb.value;
 
-            enforceEx!MYX(packet.length > 2,
+            enforceEx!MYXProtocol(packet.length > 2,
                     format("Malformed OK packet - Missing server status. Expected length > 2, got %d", packet.length));
             serverStatus = packet.consume!short();
 
-            enforceEx!MYX(packet.length >= 2, "Malformed OK packet - Missing warnings");
+            enforceEx!MYXProtocol(packet.length >= 2, "Malformed OK packet - Missing warnings");
             warnings = packet.consume!short();
         }
         else
-            throw new MYX("Malformed OK/Error packet - Incorrect type of packet", __FILE__, __LINE__);
+            throw new MYXProtocol("Malformed OK/Error packet - Incorrect type of packet", __FILE__, __LINE__);
 
         // both OK and Error packets end with a message for the rest of the packet
         message = cast(string)packet.idup;
@@ -1547,7 +1586,7 @@ public:
         _name           = packet.consume!LCS();
         _originalName   = packet.consume!LCS();
 
-        enforceEx!MYX(packet.length >= 13, "Malformed field specification packet");
+        enforceEx!MYXProtocol(packet.length >= 13, "Malformed field specification packet");
         packet.popFront(); // one byte filler here
         _charSet    = packet.consume!short();
         _length     = packet.consume!int();
@@ -1652,6 +1691,11 @@ public:
 }
 
 bool isEOFPacket(ubyte[] packet)
+in
+{
+    assert(!packet.empty);
+}
+body
 {
     if (packet.length == 0)
       return false;
@@ -1736,14 +1780,14 @@ public:
         foreach (uint i; 0 .. fieldCount)
         {
             auto packet = con.getPacket();
-            enforceEx!MYX(!packet.isEOFPacket(),
+            enforceEx!MYXProtocol(!packet.isEOFPacket(),
                     "Expected field description packet, got EOF packet in result header sequence");
 
             _fieldDescriptions[i]   = FieldDescription(packet);
             _fieldNames[i]          = _fieldDescriptions[i]._name;
         }
         auto packet = con.getPacket();
-        enforceEx!MYX(packet.isEOFPacket(),
+        enforceEx!MYXProtocol(packet.isEOFPacket(),
                 "Expected EOF packet in result header sequence");
         auto eof = EOFPacket(packet);
         con._serverStatus = eof._serverStatus;
@@ -1829,13 +1873,13 @@ public:
             _con.getPacket();  // just eat them - they are not useful
 
         if (_paramCount)
-            enforceEx!MYX(getEOFPacket(), "Expected EOF packet in result header sequence");
+            enforceEx!MYXProtocol(getEOFPacket(), "Expected EOF packet in result header sequence");
 
         foreach(uint i; 0.._colCount)
            _colDescriptions[i] = FieldDescription(_con.getPacket());
 
         if (_colCount)
-            enforceEx!MYX(getEOFPacket(), "Expected EOF packet in result header sequence");
+            enforceEx!MYXProtocol(getEOFPacket(), "Expected EOF packet in result header sequence");
     }
 
     ParamDescription param(size_t i) { return _paramDescriptions[i]; }
@@ -1942,7 +1986,7 @@ protected:
         _socket.read(header);
         // number of bytes always set as 24-bit
         uint numDataBytes = (header[2] << 16) + (header[1] << 8) + header[0];
-        enforceEx!MYX(header[3] == pktNumber, "Server packet out of order");
+        enforceEx!MYXProtocol(header[3] == pktNumber, "Server packet out of order");
         bumpPacket();
 
         ubyte[] packet = new ubyte[numDataBytes];
@@ -2018,7 +2062,7 @@ protected:
     OKErrorPacket getCmdResponse(bool asString = false)
     {
         auto okp = OKErrorPacket(getPacket());
-        enforceEx!MYX(!okp.error, "MySQL error: " ~ cast(string) okp.message);
+        enforcePacketOK(okp);
         _serverStatus = okp.serverStatus;
         return okp;
     }
@@ -2101,7 +2145,7 @@ protected:
         authBuf.length = 255;
         authBuf[0..8] = packet.consume(8); // scramble_buff
 
-        enforceEx!MYX(packet.consume!ubyte() == 0, "filler should always be 0");
+        enforceEx!MYXProtocol(packet.consume!ubyte() == 0, "filler should always be 0");
 
         consumeServerInfo(packet);
 
@@ -2110,11 +2154,11 @@ protected:
 
         // rest of the scramble
         auto len = packet.countUntil(0);
-        enforceEx!MYX(len >= 12, "second part of scramble buffer should be at least 12 bytes");
+        enforceEx!MYXProtocol(len >= 12, "second part of scramble buffer should be at least 12 bytes");
         enforce(authBuf.length > 8+len);
         authBuf[8..8+len] = packet.consume(len);
         authBuf.length = 8+len; // cut to correct size
-        enforceEx!MYX(packet.consume!ubyte() == 0, "Excepted \\0 terminating scramble buf");
+        enforceEx!MYXProtocol(packet.consume!ubyte() == 0, "Excepted \\0 terminating scramble buf");
 
         return authBuf;
     }
@@ -2421,7 +2465,7 @@ public:
 
         // For some reason this command gets an EOF packet as response
         auto packet = getPacket();
-        enforceEx!MYX(packet[0] == 254 && packet.length == 5, "Unexpected response to SET_OPTION command");
+        enforceEx!MYXProtocol(packet[0] == 254 && packet.length == 5, "Unexpected response to SET_OPTION command");
     }
 
     /// Return the in-force protocol number
@@ -2553,7 +2597,7 @@ private:
     static bool[] consumeNullBitmap(ref ubyte[] packet, uint fieldCount)
     {
         uint bitmapLength = calcBitmapLength(fieldCount);
-        enforceEx!MYX(packet.length >= bitmapLength, "Packet too small to hold null bitmap for all fields");
+        enforceEx!MYXProtocol(packet.length >= bitmapLength, "Packet too small to hold null bitmap for all fields");
         auto bitmap = packet.consume(bitmapLength);
         return decodeNullBitmap(bitmap, fieldCount);
     }
@@ -2633,7 +2677,7 @@ public:
         {
             // There's a null byte header on a binary result sequence, followed by some bytes of bitmap
             // indicating which columns are null
-            enforceEx!MYX(packet.front == 0, "Expected null header byte for binary result row");
+            enforceEx!MYXProtocol(packet.front == 0, "Expected null header byte for binary result row");
             packet.popFront();
             _nulls = consumeNullBitmap(packet, fieldCount);
         }
@@ -3454,7 +3498,7 @@ public:
      *
      * If there is an existing statement handle in the Command struct, that prepared statement is released.
      *
-     * Throws: MySQLEXception if there are pending result set items, or if the server has a problem.
+     * Throws: MySQLException if there are pending result set items, or if the server has a problem.
      */
     void prepare()
     {
@@ -3486,7 +3530,8 @@ public:
         else if(packet.front == ResultPacketMarker.error)
         {
             auto error = OKErrorPacket(packet);
-            throw new MYX("MySQL Error: " ~ cast(string) error.message, __FILE__, __LINE__);
+            enforcePacketOK(error);
+            assert(0); // FIXME: what now?
         }
         else
             assert(0); // FIXME: what now?
@@ -3536,7 +3581,7 @@ public:
                         _headersPending = false;
                         break;
                     }
-                    enforceEx!MYX(i < _fieldCount, "Field header count exceeded but no EOF packet found.");
+                    enforceEx!MYXProtocol(i < _fieldCount, "Field header count exceeded but no EOF packet found.");
                 }
             }
             if (_rowsPending)
@@ -3698,7 +3743,7 @@ public:
         {
             _con.resetPacket();
             auto okp = OKErrorPacket(packet);
-            enforceEx!MYX(!okp.error, "MySQL Error: " ~ cast(string) okp.message);
+            enforcePacketOK(okp);
             ra = okp.affected;
             _con._serverStatus = okp.serverStatus;
             _insertID = okp.insertID;
@@ -3751,7 +3796,7 @@ public:
             rows ~= Row(_con, packet, _rsh, false);
             // As the row fetches more data while incomplete, it might already have
             // fetched the EOF marker, so we have to check it again
-            if(packet.isEOFPacket())
+            if(!packet.empty && packet.isEOFPacket())
                 break;
         }
         _rowsPending = _pendingBinary = false;
@@ -3865,7 +3910,7 @@ public:
         {
             _con.resetPacket();
             auto okp = OKErrorPacket(packet);
-            enforceEx!MYX(!okp.error, "MySQL Error: " ~ cast(string) okp.message);
+            enforcePacketOK(okp);
             ra = okp.affected;
             _con._serverStatus = okp.serverStatus;
             _insertID = okp.insertID;
